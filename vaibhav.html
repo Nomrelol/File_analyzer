@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Browser & Treemap Analyzer</title>
+    <!-- 1. Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 2. Inter font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- 3. JSZip library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- 4. Chart.js for the dashboard -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- 5. NEW: D3.js for Treemap -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
+    <style>
+        /* ... (Custom styles, same as before) ... */
+        body { font-family: 'Inter', sans-serif; background-color: #111827; color: #f3f4f6; min-height: 100vh; padding-bottom: 96px; }
+        input[type="file"]::file-selector-button { background-color: #2563eb; color: white; border: 0; padding: 0.5rem 1rem; border-radius: 0.5rem; cursor: pointer; transition: background-color 0.2s; }
+        input[type="file"]::file-selector-button:hover { background-color: #1d4ed8; }
+        #previewArea::-webkit-scrollbar, #fileListContainer::-webkit-scrollbar, #treemapContainer::-webkit-scrollbar { width: 8px; }
+        #previewArea::-webkit-scrollbar-track, #fileListContainer::-webkit-scrollbar-track, #treemapContainer::-webkit-scrollbar-track { background: #1f2937; border-radius: 4px; }
+        #previewArea::-webkit-scrollbar-thumb, #fileListContainer::-webkit-scrollbar-thumb, #treemapContainer::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        #previewArea::-webkit-scrollbar-thumb:hover, #fileListContainer::-webkit-scrollbar-thumb:hover, #treemapContainer::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+        select { background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e"); background-position: right 0.5rem center; background-repeat: no-repeat; background-size: 1.5em 1.5em; -webkit-appearance: none; -moz-appearance: none; appearance: none; }
+        
+        /* NEW: Treemap styles */
+        #treemapCanvas { cursor: pointer; }
+        /* Fallback: ensure elements with 'hidden' class are not displayed even if Tailwind fails to load */
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    
+
+    <div class="w-full mx-auto">
+        <!-- Header -->
+        <header class="mb-6">
+            <div class="flex items-center gap-3 flex-wrap">
+                <h1 class="text-3xl font-bold text-white tracking-tight">File Analyzer</h1>
+                <span id="folderNameBadge" class="hidden text-sm px-3 py-1 rounded-full bg-gray-800 border border-gray-700 text-gray-200"></span>
+            </div>
+            <p class="mt-1 text-lg text-gray-400">Features: ls, cat, zip, sort, wc, dashboard, treemap</p>
+            <p class="text-sm text-gray-500 font-mono">Hotkeys: [Ctrl+F] Filter | [Ctrl+A] Select All | [Ctrl+S] Download ZIP</p>
+        </header>
+
+        <!-- Visually-hidden file input; triggered by toolbar/footer buttons -->
+        <input type="file" id="fileInput" webkitdirectory directory multiple class="sr-only" aria-hidden="true">
+        
+        <!-- Status Bar -->
+        <div class="flex justify-between items-center mb-4 px-1 text-gray-400">
+            <p id="fileCount" class="font-mono text-sm">0 files loaded</p>
+            <p id="selectionCount" class="font-mono text-sm">0 files selected</p>
+        </div>
+
+
+        <!-- Main Content: Dashboard, File List & Inspector -->
+        <main class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            
+            <!-- Column 1: Dashboard & File List -->
+            <section class="flex flex-col gap-6">
+                
+                <!-- Dashboard Section -->
+                <section>
+                    <h2 class="text-xl font-semibold mb-3 text-gray-200">Dashboard & Analyzer</h2>
+                    <!-- ... (Dashboard is the same as before) ... -->
+                    <div class="grid grid-cols-2 gap-4 p-4 bg-gray-800 rounded-lg shadow">
+                        <div id="dashboardStats" class="flex flex-col justify-center gap-4">
+                            <div><label class="text-sm text-gray-400">Total Files</label><p id="statTotalFiles" class="text-3xl font-bold text-white">0</p></div>
+                            <div><label class="text-sm text-gray-400">Total Size</label><p id="statTotalSize" class="text-3xl font-bold text-white">0 B</p></div>
+                            <div class="pt-2 border-t border-gray-700"><label class="text-sm text-gray-400">Largest File</label><p id="statLargestFile" class="text-base font-medium text-white truncate" title="N/A">N/A</p></div>
+                            <div class="pt-2 border-t border-gray-700"><label class="text-sm text-gray-400">Newest File</label><p id="statNewestFile" class="text-base font-medium text-white truncate" title="N/A">N/A</p></div>
+                        </div>
+                        <div class="relative h-48"><canvas id="typeChart"></canvas></div>
+                    </div>
+                </section>
+
+                <!-- File List / Treemap Section -->
+                <section>
+                    <div class="sticky top-0 z-20 -mt-2 pt-2 bg-gray-800/95 backdrop-blur rounded-t-lg border-b border-gray-700">
+                        <div class="flex flex-wrap items-center gap-2 p-2">
+                            <h3 class="text-sm uppercase tracking-wide text-gray-400 mr-2">File List (ls)</h3>
+                            <label for="fileInput" id="chooseFolderButton" class="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 cursor-pointer">Choose Folder</label>
+                            <input type="text" id="filterInput" placeholder="Filter files... (e.g., .jpg)" class="w-48 p-2 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <select id="sortSelect" class="text-sm p-1.5 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="name-asc">Name (A-Z)</option>
+                                <option value="name-desc">Name (Z-A)</option>
+                                <option value="size-asc">Size (Smallest)</option>
+                                <option value="size-desc">Size (Largest)</option>
+                                <option value="type-asc">Type (A-Z)</option>
+                            </select>
+                            <select id="fileQuickSelect" class="text-sm p-1.5 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[14rem]">
+                                <option value="">Quick select file…</option>
+                            </select>
+                            <button id="selectAllButton" class="px-2 py-1 text-sm text-blue-400 hover:text-blue-300">Select All</button>
+                            <button id="listSizeToggle" class="px-2 py-1 text-sm text-gray-300 hover:text-white">Expand List</button>
+                            <button id="clearSelectionButton" class="px-2 py-1 text-sm text-gray-300 hover:text-white">Clear Selection</button>
+                            <button id="resetFiltersButton" class="px-2 py-1 text-sm text-gray-300 hover:text-white">Reset Filters</button>
+                            <div class="flex items-center ml-auto"></div>
+                            <button id="zipButton" class="px-3 py-2 bg-green-600 text-white font-semibold rounded hover:bg-green-700 disabled:bg-gray-500 disabled:cursor-not-allowed">Download Selected</button>
+                        </div>
+                    </div>
+                    <!-- File List Container -->
+                    <div id="fileListContainer" class="bg-gray-800 rounded-lg border border-gray-700 shadow-inner h-64 overflow-y-auto">
+                        <ul id="fileList" class="p-2">
+                            <li class="p-3 text-gray-500">Please select a folder to begin.</li>
+                        </ul>
+                    </div>
+
+
+                    
+                </section>
+            </section>
+
+            <!-- Column 2: Inspector -->
+            <section>
+                <!-- ... (Inspector is the same as before) ... -->
+                <h2 class="text-xl font-semibold mb-3 text-gray-200 tracking-wide">Inspector</h2>
+                <div id="propertiesArea" class="mb-4 p-3 bg-gray-800 rounded-lg shadow text-sm text-gray-300"><p class="text-gray-500">Select a file to see its properties.</p></div>
+                <h3 class="sr-only">Preview</h3>
+                <div id="previewArea" class="bg-gray-900 border border-gray-700 rounded-lg shadow-inner min-h-[50vh] overflow-y-auto p-6 font-mono text-[0.95rem] leading-relaxed text-gray-300 break-words whitespace-pre-wrap"><p class="text-gray-500">Select a file from the list to preview its content.</p></div>
+
+                <div class="mt-6 mb-2 flex items-center">
+                    <h3 class="text-base font-semibold tracking-wide text-gray-200">Treemap</h3>
+                </div>
+                <div id="treemapContainer" class="bg-gray-800 rounded-lg border border-gray-700 shadow-inner h-[40vh] overflow-hidden relative">
+                    <canvas id="treemapCanvas" class="w-full h-full"></canvas>
+                    <div id="treemapTooltip" class="hidden absolute p-2 text-sm bg-gray-900 text-white rounded-md border border-gray-600 pointer-events-none"></div>
+                </div>
+            </section>
+        </main>
+        <!-- Bottom pinned footer for quick actions -->
+        <footer class="fixed bottom-0 left-0 right-0 z-40 bg-gray-900/80 backdrop-blur border-t border-gray-700 px-4 py-3">
+            <div class="max-w-7xl mx-auto flex items-center gap-3">
+                <label for="fileInput" id="footerChooseFolder" class="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 cursor-pointer">Choose Folder</label>
+                <button id="footerZip" class="px-3 py-2 bg-green-600 text-white font-semibold rounded hover:bg-green-700 disabled:bg-gray-500 disabled:cursor-not-allowed">Download Selected</button>
+                <span class="ml-auto text-sm text-gray-400">Pinned actions</span>
+            </div>
+        </footer>
+    </div>
+
+    <script>
+        /**
+         * -----------------------------------------------------------------
+         * "Few-Variable Hero" Strategy (Max 8 Variables)
+         * -----------------------------------------------------------------
+         * All state, DOM refs, and methods are bundled into the
+         * single `window.App` object to comply with the constraint.
+         * -----------------------------------------------------------------
+         */
+        window.App = {
+            // 1. STATE
+            state: {
+                allFiles: [],
+                fileHierarchy: null, // NEW
+                selectedFiles: new Set(),
+                currentPreviewFile: null,
+                currentSort: 'name-asc',
+                chartInstance: null,
+                currentLeftTab: 'list', // NEW
+                treemapData: null, // NEW
+            },
+
+            // 2. DOM
+            dom: {
+                fileInput: null, filterInput: null, fileCount: null,
+                fileList: null, previewArea: null, selectAllButton: null,
+                zipButton: null, selectionCount: null, grepInput: null,
+                grepButton: null, grepResults: null, tabPreview: null, tabGrep: null,
+                sortSelect: null, propertiesArea: null,
+                statTotalFiles: null, statTotalSize: null, typeChart: null,
+                statLargestFile: null, statNewestFile: null, loadingOverlay: null,
+                // NEW: Treemap refs
+                tabList: null, tabTreemap: null, fileListContainer: null, 
+                treemapContainer: null, treemapCanvas: null, treemapCtx: null, treemapTooltip: null
+            },
+            
+            // 3. METHODS
+            methods: {
+                init: () => {
+                    App.dom.fileInput = document.getElementById('fileInput');
+                    App.dom.filterInput = document.getElementById('filterInput');
+                    App.dom.fileCount = document.getElementById('fileCount');
+                    App.dom.fileList = document.getElementById('fileList');
+                    App.dom.previewArea = document.getElementById('previewArea');
+                    App.dom.selectAllButton = document.getElementById('selectAllButton');
+                    App.dom.zipButton = document.getElementById('zipButton');
+                    App.dom.selectionCount = document.getElementById('selectionCount');
+                    App.dom.grepInput = document.getElementById('grepInput');
+                    App.dom.grepButton = document.getElementById('grepButton');
+                    App.dom.fileQuickSelect = document.getElementById('fileQuickSelect');
+                    App.dom.grepResults = document.getElementById('grepResults');
+                    App.dom.tabPreview = document.getElementById('tabPreview');
+                    App.dom.tabGrep = document.getElementById('tabGrep');
+                    // Footer buttons
+                    App.dom.footerChooseFolder = document.getElementById('footerChooseFolder');
+                    App.dom.footerZip = document.getElementById('footerZip');
+                    App.dom.sortSelect = document.getElementById('sortSelect');
+                    App.dom.propertiesArea = document.getElementById('propertiesArea');
+                    App.dom.statTotalFiles = document.getElementById('statTotalFiles');
+                    App.dom.statTotalSize = document.getElementById('statTotalSize');
+                    App.dom.typeChart = document.getElementById('typeChart').getContext('2d');
+                    App.dom.statLargestFile = document.getElementById('statLargestFile');
+                    App.dom.statNewestFile = document.getElementById('statNewestFile');
+                    App.dom.loadingOverlay = document.getElementById('loadingOverlay');
+                    App.dom.tabList = document.getElementById('tabList');
+                    App.dom.tabTreemap = document.getElementById('tabTreemap');
+                    App.dom.fileListContainer = document.getElementById('fileListContainer');
+                    App.dom.treemapContainer = document.getElementById('treemapContainer');
+                    App.dom.treemapCanvas = document.getElementById('treemapCanvas');
+                    App.dom.treemapCtx = App.dom.treemapCanvas.getContext('2d');
+                    App.dom.treemapTooltip = document.getElementById('treemapTooltip');
+
+                    App.dom.fileInput.onchange = App.methods.handleFileSelect;
+                    App.dom.filterInput.oninput = App.methods.renderFileList;
+                    App.dom.selectAllButton.onclick = App.methods.toggleSelectAll;
+                    App.dom.zipButton.onclick = App.methods.handleZipDownload;
+                    if (App.dom.grepButton && App.dom.grepInput) {
+                        App.dom.grepButton.onclick = App.methods.handleGrep;
+                        App.dom.grepInput.oninput = () => { if (!App.v) App.v = {}; App.v.t = App.dom.grepInput.value.trim(); App.dom.grepButton.disabled = App.v.t.length === 0; };
+                        App.dom.grepInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); if (!App.dom.grepButton.disabled) App.methods.handleGrep(); } };
+                    }
+                    if (App.dom.fileQuickSelect) App.dom.fileQuickSelect.onchange = function(){ if (!App.v) App.v = {}; App.v.sel = App.dom.fileQuickSelect.value; if (!App.v.sel) return; App.v.file = App.state.allFiles.find(function(f){ return (f.webkitRelativePath || f.name) === App.v.sel; }); if (App.v.file) App.methods.showPreview(App.v.file); };
+                    App.v.listToggle = document.getElementById('listSizeToggle');
+                    if (App.v.listToggle) App.v.listToggle.onclick = function(){ if (!App.v) App.v = {}; App.v.c = App.dom.fileListContainer.classList; if (App.v.c.contains('h-64')) { App.v.c.remove('h-64'); App.v.c.add('h-[60vh]'); this.textContent = 'Collapse List'; } else { App.v.c.remove('h-[60vh]'); App.v.c.add('h-64'); this.textContent = 'Expand List'; } };
+                    if (App.dom.tabPreview) App.dom.tabPreview.onclick = () => App.methods.switchTabs('preview');
+                    if (App.dom.tabGrep) App.dom.tabGrep.onclick = () => App.methods.switchTabs('grep');
+                    App.dom.sortSelect.onchange = App.methods.handleSortChange;
+                    document.addEventListener('keydown', App.methods.handleKeydown);
+                    if (App.dom.tabList && App.dom.tabTreemap) {
+                        App.dom.tabList.onclick = () => App.methods.switchLeftTabs('list');
+                        App.dom.tabTreemap.onclick = () => App.methods.switchLeftTabs('treemap');
+                    }
+                    App.dom.treemapCanvas.onmousemove = App.methods.handleTreemapMousemove;
+                    App.dom.treemapCanvas.onmouseout = () => { App.dom.treemapTooltip.classList.add('hidden'); };
+                    
+                    // New toolbar buttons (no locals)
+                    if (!App.v) App.v = {};
+                    App.v.chooseBtn = document.getElementById('chooseFolderButton');
+                    if (App.v.chooseBtn) App.v.chooseBtn.onclick = function(){ if (App.dom.fileInput) App.dom.fileInput.click(); };
+                    if (App.dom.footerChooseFolder) App.dom.footerChooseFolder.onclick = function(){ if (App.dom.fileInput) App.dom.fileInput.click(); };
+                    App.v.clearBtn = document.getElementById('clearSelectionButton');
+                    if (App.v.clearBtn) App.v.clearBtn.onclick = function(){ App.state.selectedFiles.clear(); App.methods.updateZipButton(); App.methods.renderFileList(); };
+                    App.v.resetBtn = document.getElementById('resetFiltersButton');
+                    if (App.v.resetBtn) App.v.resetBtn.onclick = function(){ App.dom.filterInput.value = ''; App.state.currentSort = 'name-asc'; App.methods.renderFileList(); };
+                    if (App.dom.footerZip) App.dom.footerZip.onclick = App.methods.handleZipDownload;
+                    App.methods.updateZipButton();
+                    App.methods.renderDashboard();
+                    App.methods.renderTreemap();
+                    window.addEventListener('resize', App.methods.renderTreemap);
+                },
+                
+                showLoader: (show) => { /* robust overlay toggle without locals */
+                    if (!App.dom.loadingOverlay) return;
+                    if (show) { App.dom.loadingOverlay.classList.remove('hidden'); App.dom.loadingOverlay.style.display = 'flex'; }
+                    else { App.dom.loadingOverlay.classList.add('hidden'); App.dom.loadingOverlay.style.display = 'none'; }
+                },
+                
+                handleKeydown: (event) => { /* ... (same as before) ... */
+                    if (!(event.ctrlKey || event.metaKey)) return;
+                    switch (event.key.toLowerCase()) {
+                        case 'a': event.preventDefault(); App.methods.toggleSelectAll(); break;
+                        case 'f': event.preventDefault(); if (App.dom.filterInput) { App.dom.filterInput.focus(); App.dom.filterInput.select(); } break;
+                        case 's': event.preventDefault(); App.methods.handleZipDownload(); break;
+                    }
+                },
+                
+                formatBytes: (bytes, decimals = 2) => {
+                    if (!bytes || bytes === 0) return '0 B';
+                    if (!App.v) App.v = {};
+                    App.v.k = 1024;
+                    App.v.i = Math.floor(Math.log(bytes) / Math.log(App.v.k));
+                    return parseFloat((bytes / Math.pow(App.v.k, App.v.i)).toFixed(decimals < 0 ? 0 : decimals)) + ' ' + ['B','KB','MB','GB','TB'][App.v.i];
+                },
+                
+                /**
+                 * NEW: Switches between List and Treemap tabs
+                 */
+                switchLeftTabs: (tab) => {
+                    App.state.currentLeftTab = tab;
+                    if (tab === 'list') {
+                        App.dom.fileListContainer.classList.remove('hidden');
+                        App.dom.treemapContainer.classList.add('hidden');
+                        App.dom.tabList.classList.add('bg-gray-900', 'border-b-0', 'text-white');
+                        App.dom.tabList.classList.remove('bg-gray-700', 'text-gray-400');
+                        App.dom.tabTreemap.classList.add('bg-gray-700', 'text-gray-400');
+                        App.dom.tabTreemap.classList.remove('bg-gray-900', 'border-b-0', 'text-white');
+                        App.dom.sortSelect.classList.remove('hidden');
+                        App.dom.selectAllButton.classList.remove('hidden');
+                    } else {
+                        App.dom.fileListContainer.classList.add('hidden');
+                        App.dom.treemapContainer.classList.remove('hidden');
+                        App.dom.tabList.classList.add('bg-gray-700', 'text-gray-400');
+                        App.dom.tabList.classList.remove('bg-gray-900', 'border-b-0', 'text-white');
+                        App.dom.tabTreemap.classList.add('bg-gray-900', 'border-b-0', 'text-white');
+                        App.dom.tabTreemap.classList.remove('bg-gray-700', 'text-gray-400');
+                        App.dom.sortSelect.classList.add('hidden');
+                        App.dom.selectAllButton.classList.add('hidden');
+                        App.methods.renderTreemap();
+                    }
+                },
+                
+                switchTabs: (tab) => {
+                    if (!App.dom.tabPreview || !App.dom.tabGrep) return; // no-op if tabs not present
+                    if (tab === 'preview') {
+                        App.dom.previewArea.classList.remove('hidden'); if (App.dom.grepResults) App.dom.grepResults.classList.add('hidden');
+                        App.dom.tabPreview.classList.add('bg-gray-900', 'border-b-0', 'text-white'); App.dom.tabPreview.classList.remove('bg-gray-700', 'text-gray-400');
+                        App.dom.tabGrep.classList.add('bg-gray-700', 'text-gray-400'); App.dom.tabGrep.classList.remove('bg-gray-900', 'border-b-0', 'text-white');
+                    } else {
+                        App.dom.previewArea.classList.add('hidden'); if (App.dom.grepResults) App.dom.grepResults.classList.remove('hidden');
+                        App.dom.tabPreview.classList.add('bg-gray-700', 'text-gray-400'); App.dom.tabPreview.classList.remove('bg-gray-900', 'border-b-0', 'text-white');
+                        App.dom.tabGrep.classList.add('bg-gray-900', 'border-b-0', 'text-white'); 
+                        App.dom.tabGrep.classList.remove('bg-gray-700', 'text-gray-400');
+                    }
+                },
+                
+                handleSortChange: (event) => { /* ... (same as before) ... */ App.state.currentSort = event.target.value; App.methods.renderFileList(); },
+
+                handleFileSelect: (event) => {
+                    if (event.target.files) {
+                        App.state.allFiles = Array.from(event.target.files);
+                        App.state.selectedFiles.clear();
+                        // Update header folder name badge
+                        if (!App.v) App.v = {};
+                        App.v.folderName = '';
+                        if (App.state.allFiles.length > 0 && App.state.allFiles[0].webkitRelativePath) {
+                            App.v.folderName = App.state.allFiles[0].webkitRelativePath.split('/')[0] || '';
+                        }
+                        if (App.v.folderName) { document.getElementById('folderNameBadge').textContent = App.v.folderName; document.getElementById('folderNameBadge').classList.remove('hidden'); }
+                        
+                        // NEW: Build file hierarchy
+                        if (!App.v) App.v = {};
+                        App.v.root = { name: "root", children: [] };
+                        App.state.allFiles.forEach(function(file){
+                            App.v.current = App.v.root;
+                            App.v.path = (file.webkitRelativePath || file.name).split('/');
+                            App.v.path.forEach(function(part, i){
+                                if (i === App.v.path.length - 1) {
+                                    App.v.current.children.push({ name: part, value: file.size, file: file });
+                                } else {
+                                    App.v.node = App.v.current.children.find(function(c){ return c.name === part && c.children; });
+                                    if (!App.v.node) {
+                                        App.v.node = { name: part, children: [] };
+                                        App.v.current.children.push(App.v.node);
+                                    }
+                                    App.v.current = App.v.node;
+                                }
+                            });
+                        });
+                        App.state.fileHierarchy = App.v.root;
+                        
+                        App.methods.renderFileList();
+                        App.methods.renderDashboard();
+                        App.methods.updateZipButton();
+                        
+                        // Pre-render treemap if tab is active
+                        App.methods.renderTreemap();
+                    }
+                },
+                
+                renderDashboard: () => {
+                    if (!App.v) App.v = {};
+                    App.v.files = App.state.allFiles; App.v.totalFiles = App.v.files.length;
+                    App.v.totalSize = App.v.files.reduce(function(acc, f){ return acc + f.size; }, 0);
+                    App.dom.statTotalFiles.textContent = App.v.totalFiles;
+                    App.dom.statTotalSize.textContent = App.methods.formatBytes(App.v.totalSize);
+                    if (App.v.totalFiles > 0) {
+                        App.v.largest = App.v.files.reduce(function(p,c){ return (p.size > c.size) ? p : c; });
+                        App.v.newest = App.v.files.reduce(function(p,c){ return (p.lastModified > c.lastModified) ? p : c; });
+                        App.dom.statLargestFile.textContent = App.v.largest.name;
+                        App.dom.statLargestFile.title = App.v.largest.name + ' (' + App.methods.formatBytes(App.v.largest.size) + ')';
+                        App.dom.statNewestFile.textContent = App.v.newest.name;
+                        App.dom.statNewestFile.title = App.v.newest.name + ' (' + new Date(App.v.newest.lastModified).toLocaleString() + ')';
+                    } else {
+                        App.dom.statLargestFile.textContent = 'N/A';
+                        App.dom.statLargestFile.title = 'N/A';
+                        App.dom.statNewestFile.textContent = 'N/A';
+                        App.dom.statNewestFile.title = 'N/A';
+                    }
+                    App.v.typeCounts = {}; App.v.files.forEach(function(f){ App.v.ext = f.name.split('.').pop().toLowerCase() || 'other'; if (App.v.ext === f.name) { App.v.typeCounts.other = (App.v.typeCounts.other || 0) + 1; } else { App.v.typeCounts[App.v.ext] = (App.v.typeCounts[App.v.ext] || 0) + 1; } });
+                    App.v.threshold = App.v.totalFiles * 0.02; App.v.otherCount = 0; App.v.finalCounts = {}; for (App.v.ext in App.v.typeCounts) { if (App.v.typeCounts[App.v.ext] < App.v.threshold) { App.v.otherCount += App.v.typeCounts[App.v.ext]; } else { App.v.finalCounts[App.v.ext] = App.v.typeCounts[App.v.ext]; } } if (App.v.otherCount > 0) { App.v.finalCounts.other = (App.v.finalCounts.other || 0) + App.v.otherCount; }
+                    App.v.labels = Object.keys(App.v.finalCounts); App.v.data = Object.values(App.v.finalCounts);
+                    if (App.state.chartInstance) { App.state.chartInstance.destroy(); }
+                    App.state.chartInstance = new Chart(App.dom.typeChart, { type: 'doughnut', data: { labels: App.v.labels, datasets: [{ label: 'File Types', data: App.v.data, backgroundColor: ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#6366F1', '#F97316', '#06B6D4', '#D946EF'], borderWidth: 0, hoverOffset: 4 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } } });
+                },
+
+                renderFileList: () => { /* ... (same as before) ... */
+                    if (!App.v) App.v = {};
+                    App.v.filter = App.dom.filterInput.value.toLowerCase(); App.v.sortMode = App.state.currentSort;
+                    App.v.filteredFiles = App.state.allFiles.filter(function(file){ return file.name.toLowerCase().includes(App.v.filter); });
+                    App.v.filteredFiles.sort(function(a,b){ switch (App.v.sortMode) { case 'name-asc': return a.name.localeCompare(b.name); case 'name-desc': return b.name.localeCompare(a.name); case 'size-asc': return a.size - b.size; case 'size-desc': return b.size - a.size; case 'type-asc': App.v.extA = (a.name.split('.').pop() || '').toLowerCase(); App.v.extB = (b.name.split('.').pop() || '').toLowerCase(); return App.v.extA.localeCompare(App.v.extB); default: return 0; } });
+                    App.dom.fileList.innerHTML = ''; App.dom.fileCount.textContent = `${App.v.filteredFiles.length} / ${App.state.allFiles.length} files`;
+                    if (App.v.filteredFiles.length === 0) { App.dom.fileList.innerHTML = '<li class="p-3 text-gray-500">No files match.</li>'; return; }
+                    App.v.filteredFiles.forEach(function(file){
+                        App.v.li = document.createElement('li'); App.v.li.className = 'flex items-center p-2 text-gray-200 rounded-md transition-colors duration-150 group';
+                        App.v.key = file.webkitRelativePath || file.name;
+                        App.v.checkbox = document.createElement('input'); App.v.checkbox.type = 'checkbox'; App.v.checkbox.className = 'mr-3 h-4 w-4 rounded text-blue-500 bg-gray-700 border-gray-600 focus:ring-0'; App.v.checkbox.checked = App.state.selectedFiles.has(App.v.key); App.v.checkbox.onchange = function(e){ e.stopPropagation(); App.methods.toggleFileSelection(App.v.key, e.target.checked); };
+                        App.v.span = document.createElement('span'); App.v.span.textContent = file.name; App.v.span.className = 'flex-grow cursor-pointer truncate'; App.v.span.title = App.v.key; 
+                        App.v.span.onclick = function(){ App.methods.showPreview(file); };
+                        App.v.li.appendChild(App.v.checkbox); App.v.li.appendChild(App.v.span); App.dom.fileList.appendChild(App.v.li);
+                    });
+                    if (App.dom.fileQuickSelect) { App.dom.fileQuickSelect.innerHTML = '<option value="">Quick select file…</option>'; App.v.filteredFiles.forEach(function(file){ App.v.opt = document.createElement('option'); App.v.opt.value = file.webkitRelativePath || file.name; App.v.opt.textContent = file.name; App.dom.fileQuickSelect.appendChild(App.v.opt); }); }
+                },
+                
+                toggleFileSelection: (fileKey, isSelected) => { /* ... (same as before) ... */ if (isSelected) App.state.selectedFiles.add(fileKey); else App.state.selectedFiles.delete(fileKey); App.methods.updateZipButton(); },
+                
+                toggleSelectAll: () => { /* no locals */
+                    if (!App.v) App.v = {}; App.v.filter = App.dom.filterInput.value.toLowerCase(); App.v.filteredKeys = App.state.allFiles.filter(function(file){ return file.name.toLowerCase().includes(App.v.filter); }).map(function(file){ return file.webkitRelativePath || file.name; });
+                    App.v.allSelected = App.v.filteredKeys.every(function(key){ return App.state.selectedFiles.has(key); });
+                    App.v.filteredKeys.forEach(function(key){ if (App.v.allSelected) App.state.selectedFiles.delete(key); else App.state.selectedFiles.add(key); });
+                    App.methods.renderFileList(); App.methods.updateZipButton();
+                },
+                
+                updateZipButton: () => { /* sync both zip buttons */
+                    App.dom.zipButton.disabled = App.state.selectedFiles.size === 0;
+                    if (App.dom.footerZip) App.dom.footerZip.disabled = App.state.selectedFiles.size === 0;
+                    App.dom.selectionCount.textContent = `${App.state.selectedFiles.size} files selected`;
+                },
+                
+                handleZipDownload: () => { /* no locals */
+                    if (App.state.selectedFiles.size === 0) return; App.dom.zipButton.textContent = 'Zipping...'; App.dom.zipButton.disabled = true; if (App.dom.footerZip) { App.dom.footerZip.textContent = 'Zipping...'; App.dom.footerZip.disabled = true; }
+                    if (!App.v) App.v = {}; App.v.zip = new JSZip(); App.v.selectedFiles = App.state.allFiles.filter(function(file){ return App.state.selectedFiles.has(file.webkitRelativePath || file.name); });
+                    App.v.selectedFiles.forEach(function(file){ App.v.zip.file(file.webkitRelativePath || file.name, file); });
+                    App.v.zip.generateAsync({ type: 'blob' }).then(function(content){
+                        App.v.a = document.createElement('a'); App.v.a.href = URL.createObjectURL(content); App.v.a.download = 'file-browser-export.zip';
+                        document.body.appendChild(App.v.a); App.v.a.click(); document.body.removeChild(App.v.a); URL.revokeObjectURL(App.v.a.href);
+                    }).finally(function(){ App.dom.zipButton.textContent = 'Download Selected as ZIP'; App.dom.zipButton.disabled = App.state.selectedFiles.size === 0; if (App.dom.footerZip) { App.dom.footerZip.textContent = 'Download Selected'; App.dom.footerZip.disabled = App.state.selectedFiles.size === 0; } });
+                },
+
+                showPreview: (file) => { /* ... (same as before) ... */
+                    if (!file) { // Add check for safety
+                        App.dom.previewArea.innerHTML = `<p class="text-gray-500">Error: File not found.</p>`;
+                        return;
+                    }
+                    App.state.currentPreviewFile = file; App.dom.previewArea.innerHTML = `<p class=\"text-gray-400\">Loading...</p>`;
+                    App.dom.propertiesArea.innerHTML = `<div class="grid grid-cols-2 gap-x-4 gap-y-1"><span class="text-gray-500 font-semibold">Name</span><span class="text-white truncate" title="${file.name}">${file.name}</span><span class="text-gray-500 font-semibold">Size</span><span class="text-white">${App.methods.formatBytes(file.size)}</span><span class="text-gray-500 font-semibold">Type</span><span class="text-white">${file.type || 'unknown'}</span><span class="text-gray-500 font-semibold">Modified</span><span class="text-white">${new Date(file.lastModified).toLocaleString()}</span></div>`;
+                    if (file.type.startsWith('image/')) App.methods.readAndDisplayImage(file);
+                    else if (file.type.startsWith('text/') || file.type === 'application/json' || file.type === 'application/xml' || file.type === 'application/javascript' || file.type === '') App.methods.readAndDisplayText(file); // <-- FIXED TYPO (was file.POST)
+                    else App.dom.previewArea.innerHTML = `<p class="text-gray-500">No preview available.</p>`;
+                },
+                
+                readAndDisplayImage: (file) => { /* large image guard */ if (file.size > 5 * 1024 * 1024) { App.dom.previewArea.innerHTML = '<p class="text-gray-500">Image too large to preview (> 5MB). Download to view.</p>'; return; } if (!App.v) App.v = {}; App.v.reader = new FileReader(); App.v.reader.onload = function(event){ App.v.img = document.createElement('img'); App.v.img.src = event.target.result; App.v.img.className = 'max-w-full h-auto rounded-lg'; App.dom.previewArea.innerHTML = ''; App.dom.previewArea.appendChild(App.v.img); }; App.v.reader.onerror = function(){ App.dom.previewArea.textContent = 'Error reading image.'; }; App.v.reader.readAsDataURL(file); },
+
+                readAndDisplayText: (file) => { /* large text guard & truncate */
+                    if (!App.v) App.v = {}; App.v.isLarge = file.size > 2 * 1024 * 1024; App.v.reader = new FileReader(); App.v.reader.onload = function(event){ App.v.textContent = event.target.result; App.v.pre = document.createElement('pre'); App.v.pre.textContent = App.v.textContent; App.dom.previewArea.innerHTML = App.v.isLarge ? '<p class="text-gray-500">Large file detected: preview truncated.</p>' : ''; App.dom.previewArea.appendChild(App.v.pre);
+                        try { App.v.lineCount = App.v.textContent.split('\n').length; App.v.wordCount = App.v.textContent.trim().split(/\s+/).filter(Boolean).length; App.v.charCount = App.v.textContent.length; App.v.wcStats = document.createElement('div'); App.v.wcStats.className = 'grid grid-cols-2 gap-x-4 gap-y-1 mt-2 pt-2 border-t border-gray-700'; App.v.wcStats.innerHTML = `<span class=\"text-gray-500 font-semibold col-span-2 text-center text-xs uppercase tracking-wider\">Word Count ('wc')</span><span class=\"text-gray-500 font-semibold\">Lines</span><span class=\"text-white\">${App.v.lineCount}</span><span class=\"text-gray-500 font-semibold\">Words</span><span class=\"text-white\">${App.v.wordCount}</span><span class=\"text-gray-500 font-semibold\">Chars</span><span class=\"text-white\">${App.v.charCount}</span>`; App.dom.propertiesArea.appendChild(App.v.wcStats); } catch (e) { console.error("Word count failed:", e); }
+                    }; App.v.reader.onerror = function(){ App.dom.previewArea.textContent = 'Error reading text file.'; }; App.v.reader.readAsText(App.v.isLarge ? file.slice(0, 200000) : file);
+                },
+                
+                
+                /**
+                 * NEW: Renders the D3 Treemap
+                 */
+                renderTreemap: () => {
+                    if (!App.state.fileHierarchy || App.state.allFiles.length === 0) {
+                        App.dom.treemapCtx.clearRect(0, 0, App.dom.treemapCanvas.width, App.dom.treemapCanvas.height);
+                        App.dom.treemapCtx.fillStyle = '#6b7280';
+                        App.dom.treemapCtx.font = '16px Inter';
+                        App.dom.treemapCtx.fillText('Please select a folder to render treemap.', 20, 40);
+                        return;
+                    }
+                    
+                    if (!App.v) App.v = {};
+                    App.v.container = App.dom.treemapContainer;
+                    App.v.canvas = App.dom.treemapCanvas;
+                    App.v.ctx = App.dom.treemapCtx;
+                    
+                    // Set canvas size to match container (guard zero size)
+                    App.v.canvas.width = Math.max(1, App.v.container.clientWidth);
+                    App.v.canvas.height = Math.max(1, App.v.container.clientHeight);
+
+                    App.v.treemapLayout = d3.treemap().size([App.v.canvas.width, App.v.canvas.height]).paddingInner(1).paddingOuter(1).round(true);
+                    App.v.root = d3.hierarchy(App.state.fileHierarchy).sum(function(d){ return d.value; }).sort(function(a,b){ return b.value - a.value; });
+                    
+                    App.v.treemapLayout(App.v.root);
+                    App.state.treemapData = App.v.root.leaves(); // Save for tooltip
+                    
+                    App.v.colorScale = d3.scaleOrdinal(d3.schemeCategory10);
+                    
+                    App.v.ctx.clearRect(0, 0, App.v.canvas.width, App.v.canvas.height);
+                    
+                    App.v.root.leaves().forEach(function(leaf){
+                        App.v.ctx.beginPath();
+                        App.v.ctx.rect(leaf.x0, leaf.y0, leaf.x1 - leaf.x0, leaf.y1 - leaf.y0);
+                        App.v.ctx.fillStyle = App.v.colorScale(leaf.parent.data.name);
+                        App.v.ctx.fill();
+                        App.v.ctx.strokeStyle = '#111827';
+                        App.v.ctx.stroke();
+                        
+                        // Draw label if space allows
+                        App.v.ctx.save();
+                        App.v.ctx.clip();
+                        App.v.ctx.fillStyle = 'white';
+                        App.v.ctx.font = '12px Inter';
+                        App.v.nameLabel = `${leaf.data.name} (${App.methods.formatBytes(leaf.data.value)})`;
+                        App.v.widthAvail = leaf.x1 - leaf.x0;
+                        if (App.v.ctx.measureText(App.v.nameLabel).width < App.v.widthAvail - 4) {
+                             App.v.ctx.fillText(App.v.nameLabel, leaf.x0 + 4, leaf.y0 + 14);
+                        }
+                        App.v.ctx.restore();
+                    });
+                },
+                
+                /**
+                 * NEW: Handles mouse move on treemap for tooltips
+                 */
+                 handleTreemapMousemove: (event) => {
+                    if (!App.state.treemapData) return;
+                    if (!App.v) App.v = {};
+                    App.v.canvas = App.dom.treemapCanvas;
+                    App.v.rect = App.v.canvas.getBoundingClientRect();
+                    App.v.x = event.clientX - App.v.rect.left;
+                    App.v.y = event.clientY - App.v.rect.top;
+
+                    App.v.found = null;
+                    App.state.treemapData.some(function(leaf){ if (App.v.x >= leaf.x0 && App.v.x < leaf.x1 && App.v.y >= leaf.y0 && App.v.y < leaf.y1) { App.v.found = leaf; return true; } return false; });
+                    
+                    App.v.tooltip = App.dom.treemapTooltip;
+                    if (App.v.found) {
+                        App.v.tooltip.classList.remove('hidden');
+                        App.v.tooltip.style.left = `${event.clientX - App.v.rect.left + 10}px`;
+                        App.v.tooltip.style.top = `${event.clientY - App.v.rect.top + 10}px`;
+                        App.v.tooltip.innerHTML = `
+                            <strong>${App.v.found.data.name}</strong><br>
+                            ${App.methods.formatBytes(App.v.found.data.value)}<br>
+                            <span class="text-gray-400">${App.v.found.data.file.webkitRelativePath}</span>
+                        `;
+                    } else {
+                        App.v.tooltip.classList.add('hidden');
+                    }
+                 }
+            }
+        };
+
+        // Start the application
+        document.addEventListener('DOMContentLoaded', window.App.methods.init);
+
+    </script>
+</body>
+</html>
+
+

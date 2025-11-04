@@ -4,9 +4,13 @@ This is a powerful, zero-installation, client-side-only file browser and analysi
 
 Because it runs entirely in your browser, **no files are ever uploaded to a server**, ensuring your data remains completely private.
 
-
-
 ---
+## Core Constraints
+- **Line Budget**: Max 650 lines  
+- **Variable Limit**: Max 8 variables  
+- **Domain**: File tools only — organizers, readers, processors  
+- **No External Libraries or Violations**
+--- 
 
 ## 🚀 Core Features
 
